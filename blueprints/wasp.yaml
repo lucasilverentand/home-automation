@@ -1,3 +1,18 @@
+# Wasp in the Box Lighting Control Blueprint
+#
+# This automation implements a "wasp in the box" lighting control pattern:
+# - When someone enters a space and the door closes, they're "trapped" with the lights on
+# - Lights stay on until the door is opened again (breaking the "trap")
+# - Includes temporary light activation when door is open
+# - Handles multiple presence sensors
+# - Configurable delays for different scenarios
+#
+# Key behaviors:
+# 1. Door opens -> Breaks "wasp mode", temporary lighting if presence detected
+# 2. Door closes -> Activates "wasp mode" if presence detected
+# 3. Presence detected -> Either activates wasp mode or temporary lighting
+# 4. No presence -> Delayed light shutoff
+#
 blueprint:
   name: Wasp in the Box Lighting Control (Configurable)
   description: >
@@ -74,10 +89,10 @@ variables:
   no_presence_off_delay: !input no_presence_off_delay
 
 trigger:
-  # Trigger on door state change
+  # Monitor door state changes to respond to door opening/closing
   - platform: state
     entity_id: !input door_sensor
-  # Trigger on any presence sensor state change
+  # Monitor presence sensors to detect when someone enters or leaves
   - platform: state
     entity_id: !input presence_sensors
 
@@ -86,16 +101,20 @@ condition: []
 action:
   - choose:
       # --- Case 1: Door just opened ---
+      # When door opens, we want to:
+      # 1. Turn off wasp mode since area is now accessible
+      # 2. If presence detected, turn lights on briefly
+      # 3. Turn lights off after delay if no one is present and wasp mode isn't active
       - conditions:
           - condition: template
             value_template: "{{ trigger.entity_id == door_sensor and trigger.to_state.state == 'on' }}"
         sequence:
-          # Turn off wasp mode because door opened
+          # Reset wasp mode when door opens as the "trapped" state is broken
           - service: input_boolean.turn_off
             target:
               entity_id: !input wasp_mode_helper
 
-          # If presence is detected when door is opened, turn lights on briefly
+          # Only turn on lights briefly if someone is present when door opens
           - condition: template
             value_template: >
               {{ 'on' in
@@ -116,11 +135,14 @@ action:
             target: !input lights
 
       # --- Case 2: Door just closed ---
+      # When door closes with presence detected:
+      # 1. Enable wasp mode if configured (traps the lights on)
+      # 2. Ensure lights stay on for comfort
       - conditions:
           - condition: template
             value_template: "{{ trigger.entity_id == door_sensor and trigger.to_state.state == 'off' }}"
         sequence:
-          # If wasp mode is enabled and presence is currently detected, activate wasp mode and keep lights on
+          # Activate wasp mode only if enabled in config and someone is present
           - condition: template
             value_template: >
               {{ wasp_mode_enabled and
@@ -133,6 +155,9 @@ action:
             target: !input lights
 
       # --- Case 3: Presence sensor turned ON ---
+      # When new presence is detected:
+      # 1. With closed door: Enable wasp mode if configured
+      # 2. With open door: Brief light activation
       - conditions:
           - condition: template
             value_template: >
@@ -142,7 +167,7 @@ action:
                  trigger.to_state.state == 'on' }}
         sequence:
           - choose:
-              # If door is closed, and wasp mode is enabled, ensure wasp mode is on and keep lights on
+              # Closed door scenario - activate wasp mode if enabled
               - conditions:
                   - condition: state
                     entity_id: !input door_sensor
@@ -156,7 +181,7 @@ action:
                   - service: light.turn_on
                     target: !input lights
 
-              # If door is open and presence detected, turn on lights briefly if wasp mode not on
+              # Open door scenario - temporary light activation
               - conditions:
                   - condition: state
                     entity_id: !input door_sensor
@@ -175,6 +200,10 @@ action:
                     target: !input lights
 
       # --- Case 4: Presence sensor turned OFF ---
+      # When presence is lost:
+      # 1. Verify no presence on any sensor
+      # 2. Wait configured delay period
+      # 3. Turn off lights and wasp mode if still no presence
       - conditions:
           - condition: template
             value_template: >
@@ -183,7 +212,7 @@ action:
                  trigger.from_state.state == 'on' and
                  trigger.to_state.state == 'off' }}
         sequence:
-          # If no presence remains on ANY sensor, start a timer to turn off lights
+          # Only proceed if ALL presence sensors are off
           - condition: template
             value_template: >
               {{ not ('on' in states|selectattr('entity_id','in',presence_sensors)|map(attribute='state')|list) }}
